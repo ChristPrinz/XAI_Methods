@@ -97,7 +97,7 @@ Plotten Sie die Ausleihen gegen die Zeit, um den Verlauf genauer analysieren zu 
 ggplot(filter(bikesharing,yr==1), mapping=aes(x=dteday,y=cnt)) +
   geom_point()+
   labs(title="Bikesharing over the year 2012",x="",y="Count (abs)")+
-  theme_srh() + scale_srh()
+  theme(plot.title = element_text(hjust = 0.5))
 #graph2ppt(file="datecount.pptx", width=5.5, height=4)
 ```
 
@@ -255,7 +255,7 @@ sv_waterfall(sv, row_id = 1) +
 Shap Force
 ```{r}
 sv_force(sv, row_id = 1) +
-  theme_srh()
+  theme(plot.title = element_text(hjust = 0.5))
 #graph2ppt(file="figure18.pptx", width=6.5, height=5)
 ```
 
