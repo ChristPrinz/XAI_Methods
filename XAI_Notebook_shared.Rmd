@@ -1,0 +1,266 @@
+---
+title: "Demonstrating XAI Techniques in R"
+output: html_notebook
+---
+
+In diesem Notebook können Sie anhand der Analyse und verschiedener Modellierungen im Bikesharing-Datensatz nachvollziehen, wie Sie XAI-Techniken in R einsetzen können, um statistische Modelle und Machine Learning zu interpretieren und zu verstehen.
+
+# Vorbereitungen
+## Clear workspace
+Löschen Sie die alte Umgebung, um in einem "neuen" R zu starten.
+```{r}
+rm(list=ls())
+```
+
+## Installieren von Packages
+Falls Sie die in diesem Notebook benötigten Packages noch nicht haben (und nur dann), werden diese von CRAN noch nachinstalliert.
+```{r}
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("dplyr")) install.packages("dplyr") 
+if (!require("export")) install.packages("export") 
+if (!require("GGally")) install.packages("GGally") 
+if (!require("ICEbox")) install.packages("ICEbox")
+if (!require("randomForest")) install.packages("randomForest")
+if (!require("pdp")) install.packages("pdp")
+if (!require("partykit")) install.packages("partykit")
+if (!require("caret")) install.packages("caret")
+if (!require("kernelshap")) install.packages("kernelshap")
+if (!require("shapviz")) install.packages("shapviz")
+if (!require("caTools")) install.packages("caTools")
+if (!require("magrittr")) install.packages("magrittr")
+if (!require("coefplot")) install.packages("coefplot")
+if (!require("ALEPlot")) install.packages("AlEplot")
+if (!require("iml")) install.packages("iml")
+```
+## Daten laden und vorbereiten
+Sie können die Daten aus dem Internet herunterladen, importieren und einem Preprocessing unterziehen. Wochentage, Arbeitstage, Datum und Wetterbedingungen sind folglich als passende Formate (Datum, Faktoren...) kodiert.
+```{r}
+library(dplyr)
+bikesharing <- read.csv("https://raw.githubusercontent.com/christophM/interpretable-ml-book/master/data/bike-sharing-daily.csv")
+bikesharing <- bikesharing %>%
+  mutate(
+    weekday_fct = factor(x = weekday,
+             levels = c(0,1,2,3,4,5,6),
+             labels = c("Sunday",
+                       "Monday",
+                       "Tuesday",
+                       "Wednesday",
+                       "Thursday",
+                       "Friday",
+                       "Saturday")))
+bikesharing <- bikesharing %>%
+    mutate(weathersit_fct = factor(x = weathersit,
+              levels = c(1, 2, 3),
+              labels = c("Good",
+                       "Clouds/Mist",
+                       "Rain/Snow/Storm")))
+bikesharing <- bikesharing %>%
+    mutate(season_fct = factor(x = season,
+              levels = c(1, 2, 3, 4),
+              labels = c("Spring",
+                       "Summer",
+                       "Fall",
+                       "Winter")))
+bikesharing$workingday <- as.factor(bikesharing$workingday)
+bikesharing$weekday <- as.factor(bikesharing$weekday)
+bikesharing$dteday <- as.Date(bikesharing$dteday)
+bikesharing$weekday_fct <- as.character(bikesharing$weekday_fct)
+```
+
+# Explorative Datenanalyse
+## Übersicht über den Datensatz
+Sehen Sie sich die ersten sechs Zeilen des Datensatzes an.
+```{r}
+head(bikesharing)
+```
+
+## Struktur
+Sehen Sie sich Struktur und Aufbau des Datensatzes an
+```{r}
+str(bikesharing)
+```
+
+## Statistische Zusammenfassung
+Erhalten Sie für jede Variable eine Zusammenfassung in Form deskriptiver Statistik
+```{r}
+summary(bikesharing)
+```
+
+## Pairs-Plot zur visuellen Übersicht
+Plotten Sie alle Variablen gegeneinander, um Verteilungen und Zusammenhänge bereits jetzt zu verstehen
+```{r fig.height = 10, fig.width = 10, fig.align = "center", warning=FALSE,message=FALSE}
+library(GGally)
+GGally::ggpairs(bikesharing[-c(2,17,18,19)]) + theme(plot.title = element_text(hjust = 0.5))
+```
+Plotten Sie die Ausleihen gegen die Zeit, um den Verlauf genauer analysieren zu können.
+```{r}
+ggplot(filter(bikesharing,yr==1), mapping=aes(x=dteday,y=cnt)) +
+  geom_point()+
+  labs(title="Bikesharing over the year 2012",x="",y="Count (abs)")+
+  theme_srh() + scale_srh()
+#graph2ppt(file="datecount.pptx", width=5.5, height=4)
+```
+
+# Implementierung von Modellen
+## Lineares univariates Modell
+```{r}
+ggplot(bikesharing, mapping=aes(x=temp,y=cnt)) +
+  geom_point()+
+  geom_smooth(method="lm",col="#DF4807")+
+  labs(title="Bike Rentals",x="Temperature (norm.)",y="Count (abs)")+
+  theme(plot.title = element_text(hjust = 0.5))
+library(export)
+#graph2ppt(file="lmtemp.pptx", width=6.5, height=5)
+```
+
+## 10 fache Cross Validation
+```{r}
+library(caret)
+library(randomForest)
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- c("RMSE")
+```
+
+## Lineares multivariates Modell
+```{r}
+set.seed(7)
+fit.lm <- train(cnt ~ temp + hum + windspeed + factor(weekday_fct) + holiday,data=bikesharing, method="lm",metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+```
+
+### Coefficient Plot
+```{r}
+library(coefplot)
+coefplot(fit.lm, col="#DF4807",intercept=F) +
+  labs(title="Multivariate Linear Model Bike Rentals")+
+  theme(plot.title = element_text(hjust = 0.5))
+#graph2ppt(file="lmmulti.pptx", width=6.5, height=5)
+```
+
+## Decision Tree
+### Data splitting
+```{r}
+library(datasets)
+library(caTools)
+library(dplyr)
+library(magrittr)
+sample_data = sample.split(bikesharing, SplitRatio = 0.8)
+train_data <- subset(bikesharing, sample_data == TRUE)
+test_data <- subset(bikesharing, sample_data == FALSE)
+```
+
+### Entscheidungsbaum mit ctree und Visualisierung
+```{r}
+library(partykit)
+model<- ctree(cnt ~ instant + temp, data=train_data)
+plot(model,gp = gpar(fontsize = 8))
+#graph2ppt(file="decisiontree.pptx", width=20, height=10) 
+```
+
+## RF
+```{r}
+bikesharing_train <- bikesharing
+set.seed(7)
+fit.rf <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train, method="rf", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+```
+
+# XAI Methoden
+## PDP
+```{r}
+library(pdp)
+pdp <- partial(fit.rf, pred.var = c("temp"), plot = TRUE, plot.engine = "ggplot2") + labs(x="Temperature", y="Predicted counts RF",title="PDP")+theme(plot.title = element_text(hjust = 0.5))
+#graph2ppt(file="figure11.pptx", width=6.5, height=5)
+print(pdp)
+```
+
+## ICE
+### ICE Model
+```{r}
+library(ICEbox)
+library(randomForest)
+library(dplyr)
+bikesharing_ICE <- bikesharing %>% select(cnt,temp,workingday,hum,windspeed,weekday)
+X <- bikesharing_ICE
+y <- X$cnt
+X$cnt = NULL
+bhd_rf_mod <- randomForest::randomForest(X, y)
+bhd.ice = ice(object = bhd_rf_mod, X = X, y = y, predictor = "temp",
+            frac_to_build = .1) 
+```
+### ICE plot im Stil von ggplot
+```{r}
+plot(bhd.ice, x_quantile = FALSE, plot_pdp = TRUE, frac_to_plot = 1,main="ICE plot",ylab="Predicted Counts",xlab="Temperature",bty = "n", xaxt = "n", yaxt = "n") 
+box("plot",
+    bty = "l",
+    lwd = 2)
+axis(side = 1,
+     lwd = 0,
+     lwd.ticks = 2)
+axis(side = 2, lwd = 0, lwd.ticks = 2,
+     las = 2)
+#graph2ppt(file="figure3.pptx", width=6.5, height=5)
+```
+
+## ALE plot
+```{r}
+library(ALEPlot)
+library(iml)
+data <- data.frame(cnt = bikesharing$cnt,
+                   weekday = as.factor(bikesharing$weekday),
+                   temp = bikesharing$temp)
+rfm <- randomForest(cnt ~., data = data)
+low_predictor <- Predictor$new(rfm, data = data)
+plot(FeatureEffect$new(low_predictor, feature = "temp", method = "ale")) + labs(x="Temperature", y="Predicted counts RF ",title="ALE Plot")+theme(plot.title = element_text(hjust = 0.5))
+#graph2ppt(file="figure5.pptx", width=6.5, height=5)
+```
+
+## SHAP
+See: https://stackoverflow.com/questions/77025093/how-to-get-shap-values-for-caret-models-in-r
+```{r}
+library(caret)
+library(kernelshap)
+library(shapviz)
+bikesharing_train.shap <- bikesharing %>% select(cnt, temp,workingday,hum,windspeed,weekday)
+fit.rf.shap <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train.shap, method="rf", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl(method = "oob"))
+s <- kernelshap(fit.rf.shap, X = bikesharing_train.shap[, -1], bg_X = bikesharing_train.shap) 
+sv <- shapviz(s)
+```
+### SHAP Importance
+https://cran.r-project.org/web/packages/shapviz/vignettes/basic_use.html
+```{r}
+sv_importance(sv) + theme(plot.title = element_text(hjust = 0.5))
+#graph2ppt(file="figure15.pptx", width=6.5, height=5)
+```
+
+
+### SHAP Bee plot importance
+```{r}
+sv_importance(sv, kind = "bee") + theme(plot.title = element_text(hjust = 0.5))
+#graph2ppt(file="figure15.pptx", width=6.5, height=5)
+```
+
+### SHAP Dependence
+```{r}
+sv_dependence(sv, v = colnames(bikesharing_train.shap[, -1]))
+#graph2ppt(file="figure16.pptx", width=13, height=5)
+```
+### Shap Waterfall
+```{r}
+sv_waterfall(sv, row_id = 1) +
+  theme(plot.title = element_text(hjust = 0.5))
+#graph2ppt(file="figure17.pptx", width=6.5, height=5)
+```
+Shap Force
+```{r}
+sv_force(sv, row_id = 1) +
+  theme_srh()
+#graph2ppt(file="figure18.pptx", width=6.5, height=5)
+```
+
+
+Sie sind am Ende des Notebooks angelangt.
+```{r}
+print("Done")
+```
